@@ -1,0 +1,228 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var l8 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR"),
+    modis = ee.ImageCollection("MODIS/006/MOD09GQ"),
+    geometry4 = /* color: #d63000 */ee.Geometry.Polygon(
+        [[[-116.004638671875, 42.809506838324204],
+          [-115.59539794921875, 42.78129125156276],
+          [-115.499267578125, 43.004647127794435],
+          [-115.499267578125, 43.28920196020127],
+          [-116.00189208984375, 43.35114690203121],
+          [-116.19415283203125, 43.07691312608711]]]),
+    geometry = /* color: #98ff00 */ee.Geometry.Polygon(
+        [[[-115.93391418457031, 43.09346209534859],
+          [-115.80276489257812, 43.095718426590174],
+          [-115.80276489257812, 43.161366298103566],
+          [-115.9332275390625, 43.16086543618915]]]);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// based on script by Faye Peters, University of Louisville
+// modified by Megan Gallagher, Boise State University
+// for code inquiries, or adjustments please email megangallagher@u.boisestate.edu
+// code exists for: 
+//    landsat 5,7, and 8 NDVI merging with MODIS Terra daily
+//    MODIS Terra and Sentinel-2
+//    Landsat pre tier and modis daily terra - works with base R code
+//    Landsat 8 and Sentinel-2
+////////////////////////////////////////Variables//////////////////////////////////////////////
+// import Landsat 8 and MODIS daily terra surface reflectance 250m
+var region = geometry; //region you want to export 
+var bounds = geometry4 //outer bounds of image to catch boundary effect, make larger than region
+var date_begin = '2016-03-02' //start date of data collection, must be a landsat image date
+var date_end ='2016-10-13' // end date of data collection, must be the day AFTER last landsat image
+
+var csv_title = '2016_Dates_BOP' //title of csv output
+var ls_title = '2016_landsat'   // title of landsat tif file
+var mod_title = '2016_mod'      // title of modis tif file
+
+/////////////////////////////////////////Code////////////////////////////////////////////////////////////////////////
+
+var starfm = function(modis, l8){
+
+//Preliminary filtering of MODIS and Landsat
+var filt_mod = modis.filterDate(date_begin, date_end);
+var filt_l8 = l8.filterDate((date_begin, date_end))
+              .filter(ee.Filter.eq('WRS_PATH',41)) 
+              .filter(ee.Filter.eq('WRS_ROW', 30));
+
+//add bounds to subset area
+var subset_bounds = bounds.transform('EPSG:4326', 30).bounds().getInfo();
+
+
+// get rid of bad pixels but keep metadata date information
+var removeBadObservations = function(image){
+    var valid_data_mask = ee.Image(image).select('pixel_qa').bitwiseAnd(2).neq(0);
+var numberBandsHaveData =
+  image.mask().reduce(ee.Reducer.sum());
+var allOrNoBandsHaveData =
+ numberBandsHaveData.eq(0).or(numberBandsHaveData.gte(9));
+ var allBandsHaveData = allOrNoBandsHaveData;
+
+ //Make sure no band is just under zero
+ var allBandsGT = image.reduce(ee.Reducer.min()).gt(-0.001);
+ var result = ee.Image(image).mask(image.mask().and(valid_data_mask).and(allBandsHaveData).and(allBandsGT));
+ return result.copyProperties(ee.Image(image),['system:time_start']);
+};
+//NDVI functions for Landsat and MODIS
+var getNDVI_mod = function(image){
+return image
+    .addBands(image.normalizedDifference(['sur_refl_b02','sur_refl_b01']).multiply(10000).rename('NDVI'));}; 
+
+var getNDVI_l8= function(image){
+var ndvi = ee.Image(image).normalizedDifference(['B5','B4']);
+return ndvi.copyProperties(ee.Image(image),['system:time_start']);
+};
+
+
+var filt2_l8= filt_l8.filterBounds(subset_bounds).aside(print).map(removeBadObservations).map(getNDVI_l8);
+// update mask for different areas
+var subset_mask = ee.Image().byte().paint(geometry4, "id").add(1);
+
+var filtered_modis = filt_mod.filterBounds(subset_bounds).aside(print).map(getNDVI_mod);
+
+// Pull out the date:
+var extract_modis_date = function(row) {
+var d = ee.Date(row.get('system:time_start'));
+var d2 = ee.Date.fromYMD(d.get('year'), d.get('month'), d.get('day'));
+var result = ee.Feature(null, {'date': d2});
+result = result.set({'date': d2});
+return result;
+};
+
+var getQABits = function(image, start, end, newName) {
+ //// Compute the bits we need to extract.
+var pattern = 0;
+  for (var i = start; i <= end; i++) {
+ pattern += Math.pow(2, i);
+ }
+ //// Return a single band image of the extracted QA bits, giving the band a new name.
+return image.select([0], [newName])
+ .bitwiseAnd(pattern)
+ .rightShift(start); };
+ 
+print(filtered_modis);
+
+filtered_modis = filtered_modis.map(function(image){
+var quality = getQABits(image.select(2), 4, 5, 'QAMask');
+quality = quality.eq(3).not();
+return image.clip(subset_bounds).mask(image.mask().multiply(subset_mask).multiply(quality));
+ });
+
+filtered_modis = filtered_modis.select('NDVI'); //Take only NDVI band
+ 
+ var modis_multiband = ee.Image(filtered_modis.filterDate(date_begin, date_end).iterate( function(x, modis_multiband) {
+ return ee.Image(modis_multiband).addBands(ee.Image(x));
+ }, filtered_modis.first()));
+
+var dates_modis = filtered_modis.map(extract_modis_date);
+ print(dates_modis.getInfo());
+ 
+var filt2_l8_ndvi = filt2_l8.map(function(image) {
+return ee.Image(image)
+ .clip(subset_bounds)
+.mask(ee.Image(image).mask().multiply(subset_mask));
+ });
+ 
+//use this to choose the range of days, and check for overlap
+var day_expand = 1;
+
+var reduceLandsatNDVI = function(MODISdate) {
+ MODISdate = ee.Date(MODISdate.get('date'));
+ 
+var ndvi_subset = ee.ImageCollection(filt2_l8_ndvi).filterDate( MODISdate,
+ MODISdate.advance(day_expand, 'day') );
+ 
+ ndvi_subset = ndvi_subset.map(function (image) {
+  var diff = MODISdate.difference(ee.Date(ee.Image(image).get('system:time_start')), 'day').abs();
+  return ee.Image(image).set('diff', diff);
+ });
+ 
+ndvi_subset = ndvi_subset.sort('diff');
+ var ndvi_first = ndvi_subset.reduce('first');
+ var ndvi_mean = ndvi_subset.reduce('mean');
+
+return ee.Algorithms.If(
+ ndvi_first.bandNames(),
+ ndvi_first.eq(0).multiply(ndvi_mean).add(ndvi_first),
+ ee.Image(0)
+ );
+ };
+ 
+ var extract_landsat_date = function(MODISdate) {
+ MODISdate = ee.Date(MODISdate.get('date'));
+ 
+var ndvi_subset =
+ ee.ImageCollection(filt2_l8_ndvi).filterDate( MODISdate,
+ MODISdate.advance(day_expand, 'day') );
+
+ndvi_subset = ndvi_subset.map(function (image) {
+ var diff = MODISdate.difference(ee.Date(ee.Image(image).get('system:time_start')), 'day').abs();
+return ee.Image(image).set('diff', diff);
+ });
+
+ ndvi_subset = ndvi_subset.sort('diff');
+ var d = ndvi_subset.aggregate_first('system:time_start');
+ var count = ndvi_subset.aggregate_count('system:time_start');
+ 
+ d = ee.Algorithms.If(
+ ee.Number(count).gt(0),
+ ee.Date(d),
+ ee.Date('1971-01-01')
+ );
+ d = ee.Date(d);
+
+ var d2 = ee.Date.fromYMD(d.get('year'), d.get('month'),
+ d.get('day'));
+
+ var result = ee.Feature(null, {'LSdate': d2, 'MODISdate':
+ MODISdate, 'CountLSScenes': count});
+ result = result.set({'LSdate': d2, 'MODISdate': MODISdate,
+ 'CountLSScenes': count});
+ return result;
+ };
+
+var ls_collection = dates_modis.map(reduceLandsatNDVI);
+print(ls_collection,'ls collection');
+
+
+var dates_landsat = dates_modis.map(extract_landsat_date);
+
+
+Export.table(dates_landsat, csv_title);
+
+var ls_multiband = ls_collection.iterate( function(x,
+ ls_multiband) 
+{ return ee.Image(ls_multiband).addBands(ee.Image(x));
+}, ls_collection.first());
+
+ls_multiband = ee.Image(ls_multiband).multiply(10000).int16(); 
+ls_multiband = ls_multiband.mask(ls_multiband.mask().multiply(ls_multiband.neq(0))); 
+
+
+//remove repeated first layer
+var ls_multiband2=ee.Image(ls_multiband.slice(1))
+var modis_multiband2=ee.Image(modis_multiband.slice(1))
+
+
+Export.image.toDrive({
+  image: modis_multiband2,
+  description: mod_title,
+  crs:'EPSG:4326 ',
+ region:region,
+ scale:30
+});
+
+
+Export.image.toDrive({
+  image: ls_multiband2, 
+  description: ls_title, 
+  crs:'EPSG:4326',
+  region:region,
+  scale:30
+});
+
+return 'Done!'
+}
+
+var running = starfm(modis,l8)
+print(running)
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
