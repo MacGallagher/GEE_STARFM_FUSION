@@ -39,9 +39,8 @@ var starfm = function(modis, l8){
 
 //Preliminary filtering of MODIS and Landsat
 var filt_mod = modis.filterDate(date_begin, date_end);
-var filt_l8 = l8.filterDate((date_begin, date_end))
-              .filter(ee.Filter.eq('WRS_PATH',41)) 
-              .filter(ee.Filter.eq('WRS_ROW', 30));
+var filt_l8 = l8.filterDate(date_begin, date_end)
+              .filterBounds(bounds);
 
 //add bounds to subset area
 var subset_bounds = bounds.transform('EPSG:4326', 30).bounds().getInfo();
