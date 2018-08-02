@@ -1,0 +1,36 @@
+STARFM_PARAMETER_START
+# number of input pairs of fine and coarse resolution image
+  NUM_IN_PAIRS = 2
+# input coarse resolution data (saved in 2 bytes / pixel)
+  IN_PAIR_MODIS_FNAME = modis_t1.envi modis_t3.envi
+# input fine resolution data
+  IN_PAIR_LANDSAT_FNAME =  landsat_t1.envi landsat_t3.envi
+# coarse resolution data for the prediction day
+  IN_PDAY_MODIS_FNAME = modis_t2.envi
+# the output fine resolution prediction 
+  OUT_PDAY_LANDSAT_FNAME = landsat_t2_sim.envi
+# number of rows (same for all inputs)
+  NROWS = 118
+# number of columns (same for all inputs)
+  NCOLS = 210
+# spatial resolution (same for all inputs), coarse resolution data 
+# should first be resampled to fine resolution
+  RESOLUTION = 30
+# define data scale factor 
+  SCALE_FACTOR = 1
+# define metadata for fine resolution input 
+  LANDSAT_FILLV = -9999
+  LANDSAT_DATA_RANGE = 0, 10000
+  LANDSAT_UNCERTAINTY = 50
+# define metadata for coarse resolution input
+  MODIS_FILLV = -9999
+  MODIS_DATA_RANGE = 0, 10000 
+  MODIS_UNCERTAINTY = 50
+# 1 = use spatial information (suggested)
+# 0 = not use spatial information (just use information from current pixel)
+  USE_SPATIAL_FLAG = 1
+# maximum distance to searching for the spatial information 
+  MAX_SEARCH_DISTANCE = 750
+# number of slice for spectral similar testing
+  NUM_SLICE_PURE_TEST = 40
+STARFM_PARAMETER_END
